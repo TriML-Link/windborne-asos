@@ -1,8 +1,8 @@
-// Basic client for ASOS Explorer
+// Basic client for ASOS Explorer (fixed field names)
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://demotiles.maplibre.org/style.json',
-  center: [-98.5795, 39.8283], // USA center
+  center: [-98.5795, 39.8283],
   zoom: 3
 });
 
@@ -12,7 +12,7 @@ let tempChart, windChart;
 
 // Proxy helper
 async function j(path) {
-  const res = await fetch(`/api/proxy?path=${encodeURIComponent(path)}`);
+  const res = await fetch(`/api/proxy?path=${encodeURIComponent(path)}`, { cache: 'no-store' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -21,7 +21,15 @@ function renderSearch(list) {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const results = document.getElementById('results');
   results.innerHTML = '';
-  const filtered = list.filter(s => (s.id || '').toLowerCase().includes(q) || (s.name || '').toLowerCase().includes(q)).slice(0,200);
+
+  // Use station_id / station_name (NOT id/name)
+  const filtered = list
+    .filter(s =>
+      (s.station_id || '').toLowerCase().includes(q) ||
+      (s.station_name || '').toLowerCase().includes(q)
+    )
+    .slice(0, 200);
+
   for (const s of filtered) {
     const div = document.createElement('div');
     div.className = 'result-item';
@@ -33,22 +41,24 @@ function renderSearch(list) {
 
 function addMarkers() {
   for (const s of stations) {
+    if (typeof s.longitude !== 'number' || typeof s.latitude !== 'number') continue;
     const el = document.createElement('div');
     el.style.cssText = 'width:10px;height:10px;background:#4da3ff;border-radius:50%;border:2px solid #e6ecf1';
-    const m = new maplibregl.Marker(el).setLngLat([s.lon, s.lat]).addTo(map);
-    el.addEventListener('click', ()=> focusStation(s));
+    new maplibregl.Marker(el).setLngLat([s.longitude, s.latitude]).addTo(map);
+    el.addEventListener('click', () => focusStation(s));
   }
 }
 
 function focusStation(s) {
   selectedStation = s;
   document.getElementById('selected').textContent = `${s.station_id} — ${s.station_name || ''}`;
-  map.flyTo({ center: [s.longitude, s.latitude], zoom: 8 });
+  if (typeof s.longitude === 'number' && typeof s.latitude === 'number') {
+    map.flyTo({ center: [s.longitude, s.latitude], zoom: 8 });
+  }
   document.getElementById('loadObs').disabled = false;
 }
 
 function qualityNote(values) {
-  // quick z-score flag for corruption
   const nums = values.filter(v => typeof v === 'number' && isFinite(v));
   if (nums.length < 6) return null;
   const mean = nums.reduce((a,b)=>a+b,0)/nums.length;
@@ -59,13 +69,11 @@ function qualityNote(values) {
 
 function plot(id, labels, values, label) {
   const ctx = document.getElementById(id).getContext('2d');
-  const cfg = {
+  return new Chart(ctx, {
     type: 'line',
     data: { labels, datasets: [{ label, data: values, pointRadius: 0, borderWidth: 2, tension: 0.2 }]},
     options: { responsive:true, maintainAspectRatio:false, scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true }}}}
-  };
-  const chart = new Chart(ctx, cfg);
-  return chart;
+  });
 }
 
 async function loadStations() {
@@ -73,9 +81,9 @@ async function loadStations() {
     stations = await j('/stations');
     addMarkers();
     renderSearch(stations);
-  } catch(e) {
+  } catch (e) {
     console.error(e);
-    alert('Failed to load stations. Please refresh.');
+    alert('Failed to load stations (rate limit or invalid upstream JSON). Please refresh in ~30s.');
   }
 }
 
@@ -84,17 +92,19 @@ async function loadObs() {
   const warn = document.getElementById('warn');
   warn.textContent = 'Loading...';
   try {
-    const obs = await j(`/historical_weather?station=${selectedStation.id}`);
+    // Use station_id here
+    const obs = await j(`/historical_weather?station=${selectedStation.station_id}`);
     const rows = Array.isArray(obs.data) ? obs.data : [];
-    const ts = rows.map(r => (r.ts ? new Date(r.ts) : null)).filter(Boolean).map(d => d.toISOString().slice(0,16).replace('T',' '));
+    const ts = rows.map(r => (r.ts ? new Date(r.ts) : null))
+                   .filter(Boolean)
+                   .map(d => d.toISOString().slice(0,16).replace('T',' '));
 
     const temp = rows.map(r => (typeof r.temp_c === 'number' ? r.temp_c : null));
     const wind = rows.map(r => (typeof r.wind_kts === 'number' ? r.wind_kts : null));
 
-    // hide NaN and extreme outliers (simple z>3 rule)
     const zNoteT = qualityNote(temp);
     const zNoteW = qualityNote(wind);
-    const clean = (arr) => arr.map(v => (typeof v === 'number' && isFinite(v) ? v : null));
+    const clean = arr => arr.map(v => (typeof v === 'number' && isFinite(v) ? v : null));
 
     if (tempChart) tempChart.destroy();
     if (windChart) windChart.destroy();
@@ -102,28 +112,28 @@ async function loadObs() {
     windChart = plot('windChart', ts, clean(wind), 'Wind kts');
 
     warn.textContent = [zNoteT, zNoteW].filter(Boolean).join(' • ') || '';
-  } catch(e) {
+  } catch (e) {
     console.error(e);
-    warn.textContent = 'Upstream error or invalid JSON. Try again in a moment.';
+    warn.textContent = 'Upstream error or invalid JSON. Try again shortly.';
   }
 }
 
-document.getElementById('search').addEventListener('input', ()=> renderSearch(stations));
+document.getElementById('search').addEventListener('input', () => renderSearch(stations));
 document.getElementById('loadObs').addEventListener('click', loadObs);
-document.getElementById('sendQ').addEventListener('click', async ()=>{
+document.getElementById('sendQ').addEventListener('click', async () => {
   const email = (document.getElementById('qEmail').value || '').trim();
   const text = (document.getElementById('qText').value || '').trim();
   const status = document.getElementById('qStatus');
   status.textContent = 'Sending...';
-  try{
+  try {
     const res = await fetch('/api/question', {
-      method:'POST',
-      headers:{'content-type':'application/json'},
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email, text })
     });
     if (!res.ok) throw new Error(await res.text());
     status.textContent = 'Sent! If they reply, it’ll be via your email.';
-  }catch(e){
+  } catch (e) {
     status.textContent = 'Failed to send. Try again later.';
   }
 });
