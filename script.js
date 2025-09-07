@@ -1,4 +1,5 @@
-// Basic client for ASOS Explorer (robust to API variations)
+// ASOS Explorer — hardened client that tolerates many API shapes
+
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://demotiles.maplibre.org/style.json',
@@ -10,7 +11,7 @@ let stations = [];
 let selectedStation = null;
 let tempChart, windChart;
 
-// --- helpers ---
+// ---------- HTTP helper ----------
 async function j(path) {
   const res = await fetch(`/api/proxy?path=${encodeURIComponent(path)}`, { cache: 'no-store' });
   const txt = await res.text();
@@ -18,32 +19,7 @@ async function j(path) {
   try { return JSON.parse(txt); } catch { throw new Error('Invalid JSON from upstream'); }
 }
 
-// Try lots of common field names from ASOS/NOAA style feeds
-function pickTime(r) {
-  return r.ts || r.time || r.timestamp || r.datetime || r.valid_time || r.obsTimeUtc || r.date_time || r.ob_time || null;
-}
-function pickTempC(r) {
-  if (typeof r.temp_c === 'number') return r.temp_c;
-  if (typeof r.temperature_c === 'number') return r.temperature_c;
-  if (typeof r.temperatureC === 'number') return r.temperatureC;
-  if (typeof r.tmpc === 'number') return r.tmpc;               // NOAA C
-  if (typeof r.tmpf === 'number') return (r.tmpf - 32) * 5/9;  // NOAA F -> C
-  if (typeof r.temp_f === 'number') return (r.temp_f - 32) * 5/9;
-  if (typeof r.temperature === 'number') return r.temperature;  // assume °C
-  return null;
-}
-function pickWindKts(r) {
-  if (typeof r.wind_kts === 'number') return r.wind_kts;
-  if (typeof r.wind_kt === 'number') return r.wind_kt;
-  if (typeof r.wind_speed_kts === 'number') return r.wind_speed_kts;
-  if (typeof r.windSpeedKts === 'number') return r.windSpeedKts;
-  if (typeof r.sknt === 'number') return r.sknt;                // NOAA knots
-  if (typeof r.wind_mph === 'number') return r.wind_mph * 0.868976;
-  if (typeof r.wind_ms === 'number')  return r.wind_ms  * 1.94384;
-  if (typeof r.wind_speed === 'number') return r.wind_speed;    // assume kts
-  return null;
-}
-
+// ---------- Station search/render ----------
 function renderSearch(list) {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const results = document.getElementById('results');
@@ -65,12 +41,19 @@ function renderSearch(list) {
   }
 }
 
+function num(v) {
+  const n = typeof v === 'string' ? parseFloat(v) : v;
+  return (typeof n === 'number' && isFinite(n)) ? n : null;
+}
+
 function addMarkers() {
   for (const s of stations) {
-    if (typeof s.longitude !== 'number' || typeof s.latitude !== 'number') continue;
+    const lon = num(s.longitude) ?? num(s.lon);
+    const lat = num(s.latitude)  ?? num(s.lat);
+    if (lon == null || lat == null) continue;
     const el = document.createElement('div');
     el.style.cssText = 'width:10px;height:10px;background:#4da3ff;border-radius:50%;border:2px solid #e6ecf1';
-    new maplibregl.Marker(el).setLngLat([s.longitude, s.latitude]).addTo(map);
+    new maplibregl.Marker(el).setLngLat([lon, lat]).addTo(map);
     el.addEventListener('click', () => focusStation(s));
   }
 }
@@ -78,10 +61,82 @@ function addMarkers() {
 function focusStation(s) {
   selectedStation = s;
   document.getElementById('selected').textContent = `${s.station_id} — ${s.station_name || ''}`;
-  if (typeof s.longitude === 'number' && typeof s.latitude === 'number') {
-    map.flyTo({ center: [s.longitude, s.latitude], zoom: 8 });
+  const lon = num(s.longitude) ?? num(s.lon);
+  const lat = num(s.latitude)  ?? num(s.lat);
+  if (lon != null && lat != null) {
+    map.flyTo({ center: [lon, lat], zoom: 8 });
   }
   document.getElementById('loadObs').disabled = false;
+}
+
+// ---------- Field pickers (very tolerant) ----------
+function parseEpochMaybe(v) {
+  if (v == null) return null;
+  // numeric or numeric string?
+  const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : NaN);
+  if (!isNaN(n)) {
+    // seconds vs milliseconds
+    const ms = n > 1e12 ? n : n * 1000;
+    const d = new Date(ms);
+    return isNaN(d) ? null : d;
+  }
+  // ISO-ish string
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
+
+function pickTime(r) {
+  // try lots of common keys
+  const cands = ['ts','time','timestamp','datetime','date_time','valid_time','valid','obsTimeUtc','ob_time','report_time','Date','date','time_obs','timeObs','datetimeISO'];
+  for (const k of cands) {
+    if (r[k] != null) {
+      const d = parseEpochMaybe(r[k]);
+      if (d) return d;
+    }
+  }
+  return null;
+}
+
+function pickTempC(r) {
+  const table = [
+    ['temp_c', v => v],
+    ['temperature_c', v => v],
+    ['temperatureC', v => v],
+    ['tmpc', v => v],                         // NOAA °C
+    ['temp', v => v],                         // assume °C
+    ['temperature', v => v],
+    ['tmpf', v => (v - 32) * 5/9],            // °F -> °C
+    ['temp_f', v => (v - 32) * 5/9],
+    ['air_temp_set_1', v => v],               // Mesonet style
+    ['air_temp', v => v]
+  ];
+  for (const [k, fn] of table) {
+    const v = r[k];
+    if (typeof v === 'number' && isFinite(v)) return fn(v);
+    if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) return fn(Number(v));
+  }
+  return null;
+}
+
+function pickWindKts(r) {
+  const table = [
+    ['wind_kts', v => v],
+    ['wind_kt', v => v],
+    ['wind_speed_kts', v => v],
+    ['windSpeedKts', v => v],
+    ['sknt', v => v],                         // NOAA knots
+    ['wind_speed', v => v],                   // assume kts
+    ['wind_mph', v => v * 0.868976],          // mph -> kts
+    ['wind_ms', v => v * 1.94384],            // m/s -> kts
+    ['wspd', v => v],                         // generic
+    ['wind_speed_set_1', v => v]              // Mesonet style (usually m/s but varies)
+  ];
+  for (const [k, fn] of table) {
+    const v = r[k];
+    if (typeof v === 'number' && isFinite(v)) return fn(v);
+    if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) return fn(Number(v));
+  }
+  return null;
 }
 
 function qualityNote(values) {
@@ -102,6 +157,7 @@ function plot(id, labels, values, label) {
   });
 }
 
+// ---------- Loaders ----------
 async function loadStations() {
   try {
     stations = await j('/stations');
@@ -117,16 +173,22 @@ async function loadObs() {
   if (!selectedStation) return;
   const warn = document.getElementById('warn');
   warn.textContent = 'Loading...';
+
   const stationId = selectedStation.station_id;
 
+  // fetch once with retry
   async function fetchOnce() {
     const resp = await j(`/historical_weather?station=${stationId}`);
-    let rows = [];
-    if (Array.isArray(resp)) rows = resp;
-    else if (resp && Array.isArray(resp.data)) rows = resp.data;
-    else if (resp && Array.isArray(resp.observations)) rows = resp.observations;
-    else rows = [];
-    return rows;
+    // normalize to array
+    if (Array.isArray(resp)) return resp;
+    if (resp && Array.isArray(resp.data)) return resp.data;
+    if (resp && Array.isArray(resp.observations)) return resp.observations;
+    // sometimes object keyed by time -> convert
+    if (resp && typeof resp === 'object' && !Array.isArray(resp)) {
+      const vals = Object.values(resp);
+      if (vals.length && typeof vals[0] === 'object') return vals;
+    }
+    return [];
   }
 
   let rows;
@@ -147,28 +209,37 @@ async function loadObs() {
     return;
   }
 
-  const ts = rows.map(r => {
-    const t = pickTime(r);
-    if (!t) return null;
-    const d = new Date(t);
-    return isNaN(d) ? null : d;
-  }).filter(Boolean).map(d => d.toISOString().slice(0,16).replace('T',' '));
+  // map fields with tolerant pickers
+  const times = [];
+  const temps = [];
+  const winds = [];
+  for (const r of rows) {
+    const d = pickTime(r);
+    const t = pickTempC(r);
+    const w = pickWindKts(r);
+    if (d) times.push(d.toISOString().slice(0, 16).replace('T', ' '));
+    else times.push(null); // keep alignment
+    temps.push(typeof t === 'number' && isFinite(t) ? t : null);
+    winds.push(typeof w === 'number' && isFinite(w) ? w : null);
+  }
 
-  const temp = rows.map(r => pickTempC(r));
-  const wind = rows.map(r => pickWindKts(r));
+  // if ALL times are null, synthesize an index so charts still render
+  const hasAnyTime = times.some(x => x !== null);
+  const labels = hasAnyTime ? times.filter(Boolean) : rows.map((_, i) => `#${i+1}`);
 
-  const zNoteT = qualityNote(temp);
-  const zNoteW = qualityNote(wind);
+  const zNoteT = qualityNote(temps);
+  const zNoteW = qualityNote(winds);
   const clean = arr => arr.map(v => (typeof v === 'number' && isFinite(v) ? v : null));
 
   if (tempChart) tempChart.destroy();
   if (windChart) windChart.destroy();
-  tempChart = plot('tempChart', ts, clean(temp), 'Temp °C');
-  windChart = plot('windChart', ts, clean(wind), 'Wind kts');
+  tempChart = plot('tempChart', labels, clean(temps), 'Temp °C');
+  windChart = plot('windChart', labels, clean(winds), 'Wind kts');
 
   warn.textContent = [zNoteT, zNoteW].filter(Boolean).join(' • ') || '';
 }
 
+// ---------- Wire up ----------
 document.getElementById('search').addEventListener('input', () => renderSearch(stations));
 document.getElementById('loadObs').addEventListener('click', loadObs);
 document.getElementById('sendQ').addEventListener('click', async () => {
