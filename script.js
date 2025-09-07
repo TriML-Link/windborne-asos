@@ -1,4 +1,4 @@
-// ASOS Explorer — hardened client tolerant to API variations
+// ASOS Explorer — ultra-hardened client tolerant to many API shapes
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -11,7 +11,7 @@ let stations = [];
 let selectedStation = null;
 let tempChart, windChart;
 
-// ---------- HTTP helper ----------
+// ========== HTTP helper ==========
 async function j(path) {
   const res = await fetch(`/api/proxy?path=${encodeURIComponent(path)}`, { cache: 'no-store' });
   const txt = await res.text();
@@ -19,7 +19,7 @@ async function j(path) {
   try { return JSON.parse(txt); } catch { throw new Error('Invalid JSON from upstream'); }
 }
 
-// ---------- Station search/render ----------
+// ========== Station search/render ==========
 function renderSearch(list) {
   const q = document.getElementById('search').value.trim().toLowerCase();
   const results = document.getElementById('results');
@@ -67,59 +67,111 @@ function focusStation(s) {
   document.getElementById('loadObs').disabled = false;
 }
 
-// ---------- Field pickers ----------
+// ========== Deep field pickers (robust) ==========
 function parseEpochMaybe(v) {
   if (v == null) return null;
-  const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : NaN);
+  // numeric or numeric string
+  const n = typeof v === 'number' ? v : (/^\d+$/.test(String(v)) ? Number(v) : NaN);
   if (!isNaN(n)) {
-    const ms = n > 1e12 ? n : n * 1000; // ms vs sec
+    // if looks like ms already (>= ~2001 in ms), keep; else treat as seconds
+    const ms = n > 1e12 ? n : n * 1000;
     const d = new Date(ms);
     return isNaN(d) ? null : d;
   }
   const d = new Date(v);
-  return isNaN(d) ? null : d;
+  if (!isNaN(d)) return d;
+  // yyyymmddHHMM[ss] style
+  const s = String(v);
+  if (/^\d{10,14}$/.test(s)) {
+    const y = s.slice(0,4), mo = s.slice(4,6), da = s.slice(6,8);
+    const hh = s.slice(8,10) || '00', mm = s.slice(10,12) || '00', ss = s.slice(12,14) || '00';
+    const d2 = new Date(`${y}-${mo}-${da}T${hh}:${mm}:${ss}Z`);
+    return isNaN(d2) ? null : d2;
+  }
+  return null;
 }
 
-function pickTime(r) {
-  const cands = [
+// flatten nested objects {a:{b:1}} -> { 'a.b':1 }
+function flatten(obj, prefix = '', out = {}) {
+  if (obj && typeof obj === 'object') {
+    for (const [k, v] of Object.entries(obj)) {
+      const p = prefix ? `${prefix}.${k}` : k;
+      if (v && typeof v === 'object' && !Array.isArray(v)) flatten(v, p, out);
+      else out[p] = v;
+    }
+  }
+  return out;
+}
+
+function pickTimeDeep(row) {
+  const f = flatten(row);
+  const keys = Object.keys(f);
+  const candidates = [
     'ts','time','timestamp','datetime','date_time','valid_time','valid',
     'obsTimeUtc','ob_time','report_time','Date','date','time_obs','timeObs','datetimeISO'
   ];
-  for (const k of cands) {
-    if (r[k] != null) {
-      const d = parseEpochMaybe(r[k]);
-      if (d) return d;
-    }
+  // exact keys first
+  for (const k of candidates) if (k in f) {
+    const d = parseEpochMaybe(f[k]); if (d) return d;
+  }
+  // fuzzy: any key containing 'time' or 'date'
+  for (const k of keys) if (/(time|date)/i.test(k)) {
+    const d = parseEpochMaybe(f[k]); if (d) return d;
+  }
+  // if the object key itself looks like a timestamp (when rows are { "<time>": {...} })
+  // handled in loadObs by mapping Object.values
+  return null;
+}
+
+function toNumberMaybe(v) {
+  if (typeof v === 'number' && isFinite(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) return Number(v);
+  return null;
+}
+
+function pickTempCDeep(row) {
+  const f = flatten(row);
+  // Priority: explicit Celsius names
+  const cNames = ['temp_c','temperature_c','temperatureC','tmpc','air_temp_set_1','air_temp','temp','temperature'];
+  for (const k of cNames) if (k in f) {
+    const n = toNumberMaybe(f[k]); if (n != null) return n;
+  }
+  // Fahrenheit names
+  const fNames = ['tmpf','temp_f'];
+  for (const k of fNames) if (k in f) {
+    const n = toNumberMaybe(f[k]); if (n != null) return (n - 32) * 5/9;
+  }
+  // Fuzzy: any key with 'temp' or 'temperature'
+  for (const [k, v] of Object.entries(f)) if (/(temp|temperature)/i.test(k)) {
+    const n = toNumberMaybe(v);
+    if (n == null) continue;
+    // Heuristic: if it looks like Fahrenheit, convert
+    if (n > 65 && n < 150) return (n - 32) * 5/9;
+    if (n > -100 && n < 100) return n; // plausible °C
   }
   return null;
 }
 
-function pickTempC(r) {
-  const table = [
-    ['temp_c', v => v], ['temperature_c', v => v], ['temperatureC', v => v],
-    ['tmpc', v => v], ['temp', v => v], ['temperature', v => v],
-    ['tmpf', v => (v - 32) * 5/9], ['temp_f', v => (v - 32) * 5/9],
-    ['air_temp_set_1', v => v], ['air_temp', v => v]
-  ];
-  for (const [k, fn] of table) {
-    const v = r[k];
-    if (typeof v === 'number' && isFinite(v)) return fn(v);
-    if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) return fn(Number(v));
+function pickWindKtsDeep(row) {
+  const f = flatten(row);
+  // Explicit knots names
+  const kNames = ['wind_kts','wind_kt','wind_speed_kts','windSpeedKts','sknt','wspd','wind_speed_set_1','wind_speed'];
+  for (const k of kNames) if (k in f) {
+    const n = toNumberMaybe(f[k]); if (n != null) return n;
   }
-  return null;
-}
-
-function pickWindKts(r) {
-  const table = [
-    ['wind_kts', v => v], ['wind_kt', v => v], ['wind_speed_kts', v => v], ['windSpeedKts', v => v],
-    ['sknt', v => v], ['wind_speed', v => v],
-    ['wind_mph', v => v * 0.868976], ['wind_ms', v => v * 1.94384],
-    ['wspd', v => v], ['wind_speed_set_1', v => v]
-  ];
-  for (const [k, fn] of table) {
-    const v = r[k];
-    if (typeof v === 'number' && isFinite(v)) return fn(v);
-    if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) return fn(Number(v));
+  // mph
+  const mphNames = ['wind_mph','mph'];
+  for (const k of mphNames) if (k in f) {
+    const n = toNumberMaybe(f[k]); if (n != null) return n * 0.868976;
+  }
+  // m/s
+  const msNames = ['wind_ms','mps','m_s','ms'];
+  for (const k of msNames) if (k in f) {
+    const n = toNumberMaybe(f[k]); if (n != null) return n * 1.94384;
+  }
+  // Fuzzy: any 'wind'+'speed'
+  for (const [k, v] of Object.entries(f)) if (/wind/i.test(k) && /speed|spd|sknt/i.test(k)) {
+    const n = toNumberMaybe(v); if (n != null) return n;
   }
   return null;
 }
@@ -157,7 +209,7 @@ function plot(id, labels, values, label) {
   });
 }
 
-// ---------- Loaders ----------
+// ========== Loaders ==========
 async function loadStations() {
   try {
     stations = await j('/stations');
@@ -176,7 +228,7 @@ async function loadObs() {
 
   const stationId = selectedStation.station_id;
 
-  // Fetch once with a retry; normalize to array regardless of shape
+  // fetch once with retry; normalize to array
   async function fetchOnce() {
     const resp = await j(`/historical_weather?station=${stationId}`);
     if (Array.isArray(resp)) return resp;
@@ -207,23 +259,23 @@ async function loadObs() {
     return;
   }
 
-  // Build ALIGNED arrays (labels + values same length). Prefer rows with time.
+  // Build aligned arrays: only include rows with a usable timestamp
   const L = [], T = [], W = [];
   for (const r of rows) {
-    const d = pickTime(r);
-    const t = pickTempC(r);
-    const w = pickWindKts(r);
-    if (!d) continue; // keep alignment only for rows we can place on a timeline
+    const d = pickTimeDeep(r);
+    if (!d) continue;
+    const t = pickTempCDeep(r);
+    const w = pickWindKtsDeep(r);
     L.push(d.toISOString().slice(0, 16).replace('T', ' '));
     T.push(typeof t === 'number' && isFinite(t) ? t : null);
     W.push(typeof w === 'number' && isFinite(w) ? w : null);
   }
 
-  // Fallback: if no timestamps were usable, synthesize labels to still render
+  // Fallback: if no timestamps parsed, synthesize labels so charts still render
   if (L.length === 0) {
     let i = 0;
     for (const r of rows) {
-      const t = pickTempC(r), w = pickWindKts(r);
+      const t = pickTempCDeep(r), w = pickWindKtsDeep(r);
       if (t != null || w != null) {
         L.push(`#${++i}`);
         T.push(typeof t === 'number' && isFinite(t) ? t : null);
@@ -248,7 +300,7 @@ async function loadObs() {
   warn.textContent = [zNoteT, zNoteW].filter(Boolean).join(' • ') || '';
 }
 
-// ---------- Wire up ----------
+// ========== Wire up ==========
 document.getElementById('search').addEventListener('input', () => renderSearch(stations));
 document.getElementById('loadObs').addEventListener('click', loadObs);
 document.getElementById('sendQ').addEventListener('click', async () => {
