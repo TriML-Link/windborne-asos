@@ -1,4 +1,4 @@
-// ASOS Explorer — hardened client that tolerates many API shapes
+// ASOS Explorer — hardened client tolerant to API variations
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -63,31 +63,28 @@ function focusStation(s) {
   document.getElementById('selected').textContent = `${s.station_id} — ${s.station_name || ''}`;
   const lon = num(s.longitude) ?? num(s.lon);
   const lat = num(s.latitude)  ?? num(s.lat);
-  if (lon != null && lat != null) {
-    map.flyTo({ center: [lon, lat], zoom: 8 });
-  }
+  if (lon != null && lat != null) map.flyTo({ center: [lon, lat], zoom: 8 });
   document.getElementById('loadObs').disabled = false;
 }
 
-// ---------- Field pickers (very tolerant) ----------
+// ---------- Field pickers ----------
 function parseEpochMaybe(v) {
   if (v == null) return null;
-  // numeric or numeric string?
   const n = typeof v === 'number' ? v : (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : NaN);
   if (!isNaN(n)) {
-    // seconds vs milliseconds
-    const ms = n > 1e12 ? n : n * 1000;
+    const ms = n > 1e12 ? n : n * 1000; // ms vs sec
     const d = new Date(ms);
     return isNaN(d) ? null : d;
   }
-  // ISO-ish string
   const d = new Date(v);
   return isNaN(d) ? null : d;
 }
 
 function pickTime(r) {
-  // try lots of common keys
-  const cands = ['ts','time','timestamp','datetime','date_time','valid_time','valid','obsTimeUtc','ob_time','report_time','Date','date','time_obs','timeObs','datetimeISO'];
+  const cands = [
+    'ts','time','timestamp','datetime','date_time','valid_time','valid',
+    'obsTimeUtc','ob_time','report_time','Date','date','time_obs','timeObs','datetimeISO'
+  ];
   for (const k of cands) {
     if (r[k] != null) {
       const d = parseEpochMaybe(r[k]);
@@ -99,16 +96,10 @@ function pickTime(r) {
 
 function pickTempC(r) {
   const table = [
-    ['temp_c', v => v],
-    ['temperature_c', v => v],
-    ['temperatureC', v => v],
-    ['tmpc', v => v],                         // NOAA °C
-    ['temp', v => v],                         // assume °C
-    ['temperature', v => v],
-    ['tmpf', v => (v - 32) * 5/9],            // °F -> °C
-    ['temp_f', v => (v - 32) * 5/9],
-    ['air_temp_set_1', v => v],               // Mesonet style
-    ['air_temp', v => v]
+    ['temp_c', v => v], ['temperature_c', v => v], ['temperatureC', v => v],
+    ['tmpc', v => v], ['temp', v => v], ['temperature', v => v],
+    ['tmpf', v => (v - 32) * 5/9], ['temp_f', v => (v - 32) * 5/9],
+    ['air_temp_set_1', v => v], ['air_temp', v => v]
   ];
   for (const [k, fn] of table) {
     const v = r[k];
@@ -120,16 +111,10 @@ function pickTempC(r) {
 
 function pickWindKts(r) {
   const table = [
-    ['wind_kts', v => v],
-    ['wind_kt', v => v],
-    ['wind_speed_kts', v => v],
-    ['windSpeedKts', v => v],
-    ['sknt', v => v],                         // NOAA knots
-    ['wind_speed', v => v],                   // assume kts
-    ['wind_mph', v => v * 0.868976],          // mph -> kts
-    ['wind_ms', v => v * 1.94384],            // m/s -> kts
-    ['wspd', v => v],                         // generic
-    ['wind_speed_set_1', v => v]              // Mesonet style (usually m/s but varies)
+    ['wind_kts', v => v], ['wind_kt', v => v], ['wind_speed_kts', v => v], ['windSpeedKts', v => v],
+    ['sknt', v => v], ['wind_speed', v => v],
+    ['wind_mph', v => v * 0.868976], ['wind_ms', v => v * 1.94384],
+    ['wspd', v => v], ['wind_speed_set_1', v => v]
   ];
   for (const [k, fn] of table) {
     const v = r[k];
@@ -148,12 +133,27 @@ function qualityNote(values) {
   return outliers > 0 ? `${outliers} outliers auto-hidden (z>3)` : null;
 }
 
+// Chart.js helper — spanGaps draws through missing points
 function plot(id, labels, values, label) {
   const ctx = document.getElementById(id).getContext('2d');
   return new Chart(ctx, {
     type: 'line',
-    data: { labels, datasets: [{ label, data: values, pointRadius: 0, borderWidth: 2, tension: 0.2 }]},
-    options: { responsive:true, maintainAspectRatio:false, scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true }}}}
+    data: {
+      labels,
+      datasets: [{
+        label,
+        data: values,
+        pointRadius: 0,
+        borderWidth: 2,
+        tension: 0.2,
+        spanGaps: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { x: { ticks: { maxRotation: 0, autoSkip: true } } }
+    }
   });
 }
 
@@ -176,15 +176,13 @@ async function loadObs() {
 
   const stationId = selectedStation.station_id;
 
-  // fetch once with retry
+  // Fetch once with a retry; normalize to array regardless of shape
   async function fetchOnce() {
     const resp = await j(`/historical_weather?station=${stationId}`);
-    // normalize to array
     if (Array.isArray(resp)) return resp;
     if (resp && Array.isArray(resp.data)) return resp.data;
     if (resp && Array.isArray(resp.observations)) return resp.observations;
-    // sometimes object keyed by time -> convert
-    if (resp && typeof resp === 'object' && !Array.isArray(resp)) {
+    if (resp && typeof resp === 'object') {
       const vals = Object.values(resp);
       if (vals.length && typeof vals[0] === 'object') return vals;
     }
@@ -209,32 +207,43 @@ async function loadObs() {
     return;
   }
 
-  // map fields with tolerant pickers
-  const times = [];
-  const temps = [];
-  const winds = [];
+  // Build ALIGNED arrays (labels + values same length). Prefer rows with time.
+  const L = [], T = [], W = [];
   for (const r of rows) {
     const d = pickTime(r);
     const t = pickTempC(r);
     const w = pickWindKts(r);
-    if (d) times.push(d.toISOString().slice(0, 16).replace('T', ' '));
-    else times.push(null); // keep alignment
-    temps.push(typeof t === 'number' && isFinite(t) ? t : null);
-    winds.push(typeof w === 'number' && isFinite(w) ? w : null);
+    if (!d) continue; // keep alignment only for rows we can place on a timeline
+    L.push(d.toISOString().slice(0, 16).replace('T', ' '));
+    T.push(typeof t === 'number' && isFinite(t) ? t : null);
+    W.push(typeof w === 'number' && isFinite(w) ? w : null);
   }
 
-  // if ALL times are null, synthesize an index so charts still render
-  const hasAnyTime = times.some(x => x !== null);
-  const labels = hasAnyTime ? times.filter(Boolean) : rows.map((_, i) => `#${i+1}`);
+  // Fallback: if no timestamps were usable, synthesize labels to still render
+  if (L.length === 0) {
+    let i = 0;
+    for (const r of rows) {
+      const t = pickTempC(r), w = pickWindKts(r);
+      if (t != null || w != null) {
+        L.push(`#${++i}`);
+        T.push(typeof t === 'number' && isFinite(t) ? t : null);
+        W.push(typeof w === 'number' && isFinite(w) ? w : null);
+      }
+    }
+  }
 
-  const zNoteT = qualityNote(temps);
-  const zNoteW = qualityNote(winds);
-  const clean = arr => arr.map(v => (typeof v === 'number' && isFinite(v) ? v : null));
+  if (L.length === 0) {
+    warn.textContent = 'No plottable points for this station right now. Try KSFO / KLAX / KJFK.';
+    return;
+  }
+
+  const zNoteT = qualityNote(T);
+  const zNoteW = qualityNote(W);
 
   if (tempChart) tempChart.destroy();
   if (windChart) windChart.destroy();
-  tempChart = plot('tempChart', labels, clean(temps), 'Temp °C');
-  windChart = plot('windChart', labels, clean(winds), 'Wind kts');
+  tempChart = plot('tempChart', L, T, 'Temp °C');
+  windChart = plot('windChart', L, W, 'Wind kts');
 
   warn.textContent = [zNoteT, zNoteW].filter(Boolean).join(' • ') || '';
 }
