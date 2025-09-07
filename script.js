@@ -91,32 +91,54 @@ async function loadObs() {
   if (!selectedStation) return;
   const warn = document.getElementById('warn');
   warn.textContent = 'Loading...';
-  try {
-    // Use station_id here
-    const obs = await j(`/historical_weather?station=${selectedStation.station_id}`);
-    const rows = Array.isArray(obs.data) ? obs.data : [];
-    const ts = rows.map(r => (r.ts ? new Date(r.ts) : null))
-                   .filter(Boolean)
-                   .map(d => d.toISOString().slice(0,16).replace('T',' '));
 
-    const temp = rows.map(r => (typeof r.temp_c === 'number' ? r.temp_c : null));
-    const wind = rows.map(r => (typeof r.wind_kts === 'number' ? r.wind_kts : null));
+  const stationId = selectedStation.station_id;
 
-    const zNoteT = qualityNote(temp);
-    const zNoteW = qualityNote(wind);
-    const clean = arr => arr.map(v => (typeof v === 'number' && isFinite(v) ? v : null));
-
-    if (tempChart) tempChart.destroy();
-    if (windChart) windChart.destroy();
-    tempChart = plot('tempChart', ts, clean(temp), 'Temp °C');
-    windChart = plot('windChart', ts, clean(wind), 'Wind kts');
-
-    warn.textContent = [zNoteT, zNoteW].filter(Boolean).join(' • ') || '';
-  } catch (e) {
-    console.error(e);
-    warn.textContent = 'Upstream error or invalid JSON. Try again shortly.';
+  async function fetchOnce() {
+    const obs = await j(`/historical_weather?station=${stationId}`);
+    if (!obs || !Array.isArray(obs.data)) throw new Error('Bad payload');
+    return obs;
   }
+
+  let obs;
+  try {
+    obs = await fetchOnce();
+  } catch (_e) {
+    // Retry once — upstream is flaky sometimes
+    try {
+      obs = await fetchOnce();
+    } catch (e2) {
+      console.error('Historical fetch failed:', e2);
+      warn.textContent = 'No data right now for this station. Try another (e.g., KSFO, KLAX, KJFK).';
+      return;
+    }
+  }
+
+  const rows = Array.isArray(obs.data) ? obs.data : [];
+  if (rows.length === 0) {
+    warn.textContent = 'No data available for this station. Try another (e.g., KSFO, KLAX, KJFK).';
+    return;
+  }
+
+  const ts = rows.map(r => (r.ts ? new Date(r.ts) : null))
+                 .filter(Boolean)
+                 .map(d => d.toISOString().slice(0,16).replace('T',' '));
+
+  const temp = rows.map(r => (typeof r.temp_c === 'number' ? r.temp_c : null));
+  const wind = rows.map(r => (typeof r.wind_kts === 'number' ? r.wind_kts : null));
+
+  const zNoteT = qualityNote(temp);
+  const zNoteW = qualityNote(wind);
+  const clean = arr => arr.map(v => (typeof v === 'number' && isFinite(v) ? v : null));
+
+  if (tempChart) tempChart.destroy();
+  if (windChart) windChart.destroy();
+  tempChart = plot('tempChart', ts, clean(temp), 'Temp °C');
+  windChart = plot('windChart', ts, clean(wind), 'Wind kts');
+
+  warn.textContent = [zNoteT, zNoteW].filter(Boolean).join(' • ') || '';
 }
+
 
 document.getElementById('search').addEventListener('input', () => renderSearch(stations));
 document.getElementById('loadObs').addEventListener('click', loadObs);
