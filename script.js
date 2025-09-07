@@ -1,4 +1,4 @@
-// Basic client for ASOS Explorer (robust to API field variations)
+// Basic client for ASOS Explorer (robust to API variations)
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://demotiles.maplibre.org/style.json',
@@ -10,12 +10,38 @@ let stations = [];
 let selectedStation = null;
 let tempChart, windChart;
 
-// Proxy helper
+// --- helpers ---
 async function j(path) {
   const res = await fetch(`/api/proxy?path=${encodeURIComponent(path)}`, { cache: 'no-store' });
   const txt = await res.text();
   if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
   try { return JSON.parse(txt); } catch { throw new Error('Invalid JSON from upstream'); }
+}
+
+// Try lots of common field names from ASOS/NOAA style feeds
+function pickTime(r) {
+  return r.ts || r.time || r.timestamp || r.datetime || r.valid_time || r.obsTimeUtc || r.date_time || r.ob_time || null;
+}
+function pickTempC(r) {
+  if (typeof r.temp_c === 'number') return r.temp_c;
+  if (typeof r.temperature_c === 'number') return r.temperature_c;
+  if (typeof r.temperatureC === 'number') return r.temperatureC;
+  if (typeof r.tmpc === 'number') return r.tmpc;               // NOAA C
+  if (typeof r.tmpf === 'number') return (r.tmpf - 32) * 5/9;  // NOAA F -> C
+  if (typeof r.temp_f === 'number') return (r.temp_f - 32) * 5/9;
+  if (typeof r.temperature === 'number') return r.temperature;  // assume °C
+  return null;
+}
+function pickWindKts(r) {
+  if (typeof r.wind_kts === 'number') return r.wind_kts;
+  if (typeof r.wind_kt === 'number') return r.wind_kt;
+  if (typeof r.wind_speed_kts === 'number') return r.wind_speed_kts;
+  if (typeof r.windSpeedKts === 'number') return r.windSpeedKts;
+  if (typeof r.sknt === 'number') return r.sknt;                // NOAA knots
+  if (typeof r.wind_mph === 'number') return r.wind_mph * 0.868976;
+  if (typeof r.wind_ms === 'number')  return r.wind_ms  * 1.94384;
+  if (typeof r.wind_speed === 'number') return r.wind_speed;    // assume kts
+  return null;
 }
 
 function renderSearch(list) {
@@ -76,30 +102,6 @@ function plot(id, labels, values, label) {
   });
 }
 
-// ---- flexible mappers for unknown schemas ----
-function pickTime(r) {
-  return r.ts || r.time || r.timestamp || r.datetime || r.valid_time || r.obsTimeUtc || r.date_time || r.ob_time || null;
-}
-function pickTempC(r) {
-  if (typeof r.temp_c === 'number') return r.temp_c;
-  if (typeof r.temperature_c === 'number') return r.temperature_c;
-  if (typeof r.temperatureC === 'number') return r.temperatureC;
-  if (typeof r.tmpc === 'number') return r.tmpc;             // sometimes celsius
-  if (typeof r.tmpf === 'number') return (r.tmpf - 32) * 5/9; // NOAA-style F -> C
-  if (typeof r.temp_f === 'number') return (r.temp_f - 32) * 5/9;
-  return null;
-}
-function pickWindKts(r) {
-  if (typeof r.wind_kts === 'number') return r.wind_kts;
-  if (typeof r.wind_kt === 'number') return r.wind_kt;
-  if (typeof r.wind_speed_kts === 'number') return r.wind_speed_kts;
-  if (typeof r.windSpeedKts === 'number') return r.windSpeedKts;
-  if (typeof r.sknt === 'number') return r.sknt;             // NOAA knots
-  if (typeof r.wind_mph === 'number') return r.wind_mph * 0.868976;
-  if (typeof r.wind_ms === 'number')  return r.wind_ms  * 1.94384;
-  return null;
-}
-
 async function loadStations() {
   try {
     stations = await j('/stations');
@@ -135,7 +137,7 @@ async function loadObs() {
     try { rows = await fetchOnce(); }
     catch (e2) {
       console.error('Historical fetch failed:', e1, e2);
-      warn.textContent = 'Upstream error or invalid JSON. Try again shortly or pick another station (KSFO/KLAX/KJFK).';
+      warn.textContent = 'Upstream error or invalid JSON. Pick another station (KSFO/KLAX/KJFK) and try again.';
       return;
     }
   }
