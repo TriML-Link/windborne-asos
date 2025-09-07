@@ -1,0 +1,17 @@
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:#0b1220;color:#e6ecf1}
+header{padding:16px 20px;border-bottom:1px solid #1f2b44;background:#0e172b;position:sticky;top:0;z-index:10}
+h1{margin:0;font-size:20px} .tag{margin:4px 0 0;color:#9db2d0;font-size:12px}
+main{display:grid;grid-template-columns:360px 1fr;gap:16px;padding:16px}
+.left .card, .right .card{background:#0e172b;border:1px solid #1f2b44;border-radius:14px;padding:12px}
+#map{height:420px;border-radius:14px;border:1px solid #1f2b44;margin-bottom:16px}
+label{display:block;color:#9db2d0;font-size:12px;margin:8px 0 4px}
+input, textarea{width:100%;padding:10px;border-radius:10px;border:1px solid #1f2b44;background:#0b1220;color:#e6ecf1}
+button{margin-top:8px;padding:10px 12px;border-radius:10px;border:1px solid #335eea;background:#1b2a4a;color:#e6ecf1;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+.results{max-height:220px;overflow:auto;margin-top:8px}
+.result-item{padding:8px;border-bottom:1px solid #1f2b44;cursor:pointer}
+.result-item:hover{background:#0b152a}
+.warn{color:#ffc34d;margin-top:8px;font-size:12px}
+.status{margin-top:8px;font-size:12px}
+footer{padding:10px 16px;border-top:1px solid #1f2b44;color:#9db2d0}
+@media (max-width: 900px){main{grid-template-columns:1fr} #map{height:300px}}

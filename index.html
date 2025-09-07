@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ASOS Explorer — WindBorne Challenge</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- MapLibre & OSM -->
+  <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>ASOS Explorer</h1>
+    <p class="tag">Search, map, and visualize ASOS station history. Built for WindBorne Systems.</p>
+  </header>
+
+  <main>
+    <section class="left">
+      <div class="card">
+        <label for="search">Search station</label>
+        <input id="search" type="text" placeholder="Type station ID or name (e.g., KSFO)" />
+        <div id="results" class="results"></div>
+      </div>
+      <div class="card">
+        <h3>Selected Station</h3>
+        <div id="selected">None</div>
+        <button id="loadObs" disabled>Load Historical Weather</button>
+        <div id="warn" class="warn"></div>
+      </div>
+      <div class="card">
+        <h3>Ask WindBorne a question</h3>
+        <p>They invited POSTed questions. Drop one here with your email and we'll send it to them.</p>
+        <label>Email</label>
+        <input id="qEmail" type="email" placeholder="you@example.com"/>
+        <label>Question</label>
+        <textarea id="qText" rows="3" placeholder="Your question about the API or role..."></textarea>
+        <button id="sendQ">Send Question</button>
+        <div id="qStatus" class="status"></div>
+      </div>
+    </section>
+
+    <section class="right">
+      <div id="map"></div>
+      <div class="card">
+        <h3>Temperature (°C)</h3>
+        <canvas id="tempChart"></canvas>
+      </div>
+      <div class="card">
+        <h3>Wind (kts)</h3>
+        <canvas id="windChart"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <small>API: sfc.windbornesystems.com • This demo uses an edge proxy for rate limits & CORS.</small>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
