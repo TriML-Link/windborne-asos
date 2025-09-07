@@ -25,7 +25,7 @@ function renderSearch(list) {
   for (const s of filtered) {
     const div = document.createElement('div');
     div.className = 'result-item';
-    div.textContent = `${s.id} — ${s.name || 'Unknown'} (${s.country || '—'})`;
+    div.textContent = `${s.station_id} — ${s.station_name || 'Unknown'}`;
     div.onclick = () => focusStation(s);
     results.appendChild(div);
   }
@@ -42,8 +42,8 @@ function addMarkers() {
 
 function focusStation(s) {
   selectedStation = s;
-  document.getElementById('selected').textContent = `${s.id} — ${s.name || ''}`;
-  map.flyTo({ center: [s.lon, s.lat], zoom: 8 });
+  document.getElementById('selected').textContent = `${s.station_id} — ${s.station_name || ''}`;
+  map.flyTo({ center: [s.longitude, s.latitude], zoom: 8 });
   document.getElementById('loadObs').disabled = false;
 }
 
