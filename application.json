@@ -1,0 +1,11 @@
+{
+  "career_application": {
+    "name": "Sreelekha Maganti",
+    "email": "sreelekhamaganti26@gmail.com",
+    "role": "Software Engineering Intern Product",
+    "submission_url": "https://windborne-asos.vercel.app",
+    "portfolio_url": "https://www.linkedin.com/in/maganti-sreelekha/",
+    "resume_url": "https://drive.google.com/file/d/1E5zubvL6n6Gat-XF6ngvR65Rf4vrcubf/view?usp=sharing",
+    "notes": "Built an ASOS Explorer (MapLibre + Chart.js). Robust parsing across schema variations (timestamps/temp/wind), unit conversion (F→C, mph/m/s→kts), retry on bad JSON, gap-tolerant charts, and a rate-limited proxy (20/min). Happy to discuss decisions and next steps."
+  }
+}
